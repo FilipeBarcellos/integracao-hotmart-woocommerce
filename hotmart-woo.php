@@ -184,24 +184,36 @@ add_action('rest_api_init', 'hotmart_webhook_endpoint'); // Adiciona a ação ao
  * Processa os dados recebidos e executa ações com base neles.
  */
 function hotmart_webhook_callback(WP_REST_Request $request) {
-      // Log dos dados brutos recebidos
+    // Log dos dados brutos recebidos
     $data_raw = $request->get_body();
     hotmart_log_error("Dados brutos recebidos: " . $data_raw, true);
-  
-  // Obtém os dados JSON enviados para o webhook.
+
+    // Obtém os dados JSON enviados para o webhook.
     $data = $request->get_json_params(); 
     if (!$data) {
         hotmart_log_error('No data provided in request.', false, true, ['Request Body' => $request->get_body()]);
         return new WP_REST_Response(array('message' => 'No data provided'), 400);
     }
-  
-      // Definindo as variáveis $transactionId e $userDetails
-    $transactionId = $data["sale"]["id"];
-    $userDetails = $data["client"];
+
+    // Obtém o hottok da query string da URL
+    $hottok_recebido = $request->get_param('hottok');
+
+    // Seu hottok real (substitua pelo seu hottok)
+    $hottok_esperado = 'SdRqVOJ1rCBJBgORfpAmavAYh0Nj3U76908';
+
+    // Compara o hottok recebido com o esperado
+    if ($hottok_recebido !== $hottok_esperado) {
+        hotmart_log_error('Hottok inválido: ' . $hottok_recebido);
+        return new WP_REST_Response(array('message' => 'Hottok inválido'), 403); // Retorna erro 403 Forbidden
+    }
+
+    // Definindo as variáveis $transactionId e $userDetails
+    $transactionId = $data["purchase"]["transaction"];
+    $userDetails = $data["buyer"];
 
 
     // Verifica se todos os campos necessários estão presentes nos dados.
-    $required_keys = ["seller", "client", "product", "sale"];
+    $required_keys = ["buyer", "product", "purchase", "event"];
     foreach ($required_keys as $key) {
         if (!isset($data[$key])) {
             hotmart_log_error("Missing data: $key in request.");
@@ -210,20 +222,20 @@ function hotmart_webhook_callback(WP_REST_Request $request) {
     }
 
     // Valida o formato dos dados recebidos.
-    if (!is_array($data["client"]) || !is_array($data["product"]) || !is_array($data["sale"])) {
+    if (!is_array($data["buyer"]) || !is_array($data["product"]) || !is_array($data["purchase"])) {
         hotmart_log_error('Invalid data format in request.');
         return new WP_REST_Response(array('message' => 'Invalid data format'), 400);
     }
 
     // Valida e sanitiza o e-mail do cliente.
-    $email = sanitize_email($data["client"]["email"]);
+    $email = sanitize_email($data["buyer"]["email"]);
     if (!is_email($email)) {
         hotmart_log_error('Invalid email address provided: ' . $email);
         return new WP_REST_Response(array('message' => 'Invalid email address'), 400);
     }
 
     // Sanitiza e valida o nome completo do cliente.
-    $full_name = sanitize_text_field($data["client"]["name"]);
+    $full_name = sanitize_text_field($data["buyer"]["name"]);
     if (empty($full_name)) {
         hotmart_log_error('Full name is empty.');
         return new WP_REST_Response(array('message' => 'Full name is empty'), 400);
@@ -247,14 +259,14 @@ function hotmart_webhook_callback(WP_REST_Request $request) {
     $token = sanitize_text_field($request->get_header('authorization')); // Obtém o token de autorização do cabeçalho da requisição.
 
     // Processa a venda com base no status atual.
-    $current_status = $data["sale"]["status"];
-    $transaction_id = $data["sale"]["id"]; // Obtém o número da transação
+    $current_status = $data["event"];
+    $transaction_id = $data["purchase"]["transaction"];
 
-    if ($current_status == "refunded" || $current_status == "chargedback") {
+    if ($current_status == "PURCHASE_PROTEST" || $current_status == "PURCHASE_CHARGEBACK") {
         wc_custom_refund_order_by_transaction_id($transaction_id); // Processa o reembolso com base no número da transação.
 
       
-    } elseif ($current_status == "paid") {
+    } elseif ($current_status == "PURCHASE_APPROVED") {
         $user = get_user_by('email', $email); // Obtém o usuário pelo e-mail.
         if (!$user) {
             // Se o usuário não existir, cria um novo.
@@ -289,11 +301,10 @@ if (is_wp_error($order)) {
     return new WP_REST_Response(array('message' => 'Failed to create order'), 500);
 }
 
-
-
     // Se tudo ocorrer bem, responde com sucesso.
     return new WP_REST_Response(array('success' => true, 'message' => 'Processed successfully!'), 200);
 }
+
 
 /**
  * Cria um pedido no WooCommerce com base nos dados fornecidos.
